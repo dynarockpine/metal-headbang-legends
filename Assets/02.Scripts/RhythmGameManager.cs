@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -46,6 +47,7 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField] private GameObject notePrefab;
     [SerializeField] private RectTransform noteParent;
     [SerializeField] private RectTransform judgmentLine;
+    [SerializeField] private RectTransform perspectiveOrigin;
     [SerializeField] private RectTransform[] lanePoints = new RectTransform[5];
 
     [Header("Timing")]
@@ -56,8 +58,23 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField] private float tapMaxDuration = 0.25f;
     [SerializeField] private float tapMaxMovement = 60f;
     [SerializeField] private float swipeDownMinDistance = 180f;
+    [SerializeField] private float swipeHorizontalMinDistance = 180f;
     [SerializeField] private float swipeMaxDuration = 0.5f;
     [SerializeField] private float swipeVerticalBias = 1.2f;
+    [SerializeField] private float swipeHorizontalBias = 1.2f;
+
+    [Header("Lane Perspective")]
+    [SerializeField, Range(0f, 0.4f)] private float spawnDepthOnLane = 0.04f;
+    [SerializeField, Range(0.1f, 1f)] private float noteSpawnScale = 0.32f;
+    [SerializeField, Range(0.5f, 2f)] private float noteHitScale = 1f;
+
+    [Header("Lane Visuals")]
+    [SerializeField] private bool generateLaneVisuals = true;
+    [SerializeField] private float laneVisualWidth = 140f;
+    [SerializeField] private float laneGlowWidth = 24f;
+    [SerializeField] private float laneVisualInsetFromHit = 18f;
+    [SerializeField] private Color laneBaseColor = new Color(0.03f, 0.03f, 0.05f, 0.82f);
+    [SerializeField] private Color laneEdgeColor = new Color(1f, 1f, 1f, 0.14f);
 
     [Header("UI")]
     [SerializeField] private Text scoreText;
@@ -65,6 +82,11 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField] private Text judgmentText;
     [SerializeField] private Color judgmentLineColor = new Color(1f, 1f, 1f, 0.85f);
     [SerializeField] private Vector2 judgmentLineSize = new Vector2(920f, 10f);
+
+    [Header("Chart Source")]
+    [SerializeField] private bool loadChartFromJson = true;
+    [SerializeField] private string chartFileName = "Racing";
+    [SerializeField] private TextAsset chartJsonAsset;
 
     [Header("Prototype Chart")]
     [SerializeField] private NoteData[] chart =
@@ -100,6 +122,7 @@ public class RhythmGameManager : MonoBehaviour
         }
 
         ResolveReferences();
+        LoadChartIfAvailable();
 
         if (chart != null)
         {
@@ -110,6 +133,7 @@ public class RhythmGameManager : MonoBehaviour
     private void Start()
     {
         ResolveReferences();
+        EnsureLaneVisuals();
         EnsureJudgmentLineVisual();
         EnsureGameplayUi();
         RefreshScoreUi();
@@ -132,7 +156,9 @@ public class RhythmGameManager : MonoBehaviour
         HandleGestureInput();
         UpdateJudgmentText();
 
-        while (nextNoteIndex < chart.Length && musicSource.time >= chart[nextNoteIndex].time - spawnLeadTime)
+        float songTime = GetSongTime();
+
+        while (nextNoteIndex < chart.Length && songTime >= chart[nextNoteIndex].time - spawnLeadTime)
         {
             SpawnNote(chart[nextNoteIndex]);
             nextNoteIndex++;
@@ -167,6 +193,48 @@ public class RhythmGameManager : MonoBehaviour
         return chart != null && chart.Length > 0;
     }
 
+    public float GetSongTime()
+    {
+        if (musicSource == null)
+        {
+            return 0f;
+        }
+
+        AudioClip clip = musicSource.clip;
+        if (clip != null && clip.frequency > 0 && musicSource.timeSamples >= 0)
+        {
+            return (float)musicSource.timeSamples / clip.frequency;
+        }
+
+        return 0f;
+    }
+
+    public void RestartChartPlayback(bool restartMusic)
+    {
+        nextNoteIndex = 0;
+        score = 0;
+        combo = 0;
+        judgmentDisplayTimer = 0f;
+        gestureInProgress = false;
+
+        ClearActiveNotes();
+        RefreshScoreUi();
+        RefreshComboUi();
+        HideJudgmentText();
+
+        if (musicSource == null)
+        {
+            return;
+        }
+
+        if (restartMusic)
+        {
+            musicSource.Stop();
+            musicSource.timeSamples = 0;
+            musicSource.Play();
+        }
+    }
+
     [ContextMenu("Auto Assign References")]
     private void ResolveReferences()
     {
@@ -183,6 +251,16 @@ public class RhythmGameManager : MonoBehaviour
         if (noteParent == null)
         {
             noteParent = FindRectTransformInScene("LaneArea");
+        }
+
+        if (perspectiveOrigin == null)
+        {
+            perspectiveOrigin = FindRectTransformInScene("PerspectiveOrigin");
+        }
+
+        if (perspectiveOrigin == null)
+        {
+            perspectiveOrigin = FindRectTransformInScene("LaneOrigin");
         }
 
         if (judgmentLine == null)
@@ -238,6 +316,7 @@ public class RhythmGameManager : MonoBehaviour
             $"notePrefab={(notePrefab != null)}, " +
             $"noteParent={(noteParent != null ? noteParent.name : "null")}, " +
             $"judgmentLine={(judgmentLine != null ? judgmentLine.name : "null")}, " +
+            $"perspectiveOrigin={(perspectiveOrigin != null ? perspectiveOrigin.name : "null")}, " +
             $"lanePoints={GetLaneStatus()}");
     }
 
@@ -310,8 +389,8 @@ public class RhythmGameManager : MonoBehaviour
             rhythmNote = noteObject.AddComponent<RhythmNote>();
         }
 
-        Vector2 spawnPosition = lanePoints[noteData.lane].anchoredPosition;
-        Vector2 targetPosition = new Vector2(spawnPosition.x, judgmentLine.anchoredPosition.y);
+        Vector2 targetPosition = lanePoints[noteData.lane].anchoredPosition;
+        Vector2 spawnPosition = GetSpawnPosition(targetPosition);
 
         rhythmNote.Initialize(
             this,
@@ -320,6 +399,8 @@ public class RhythmGameManager : MonoBehaviour
             spawnLeadTime,
             spawnPosition,
             targetPosition,
+            noteSpawnScale,
+            noteHitScale,
             noteData.type,
             noteData.lane);
 
@@ -411,6 +492,14 @@ public class RhythmGameManager : MonoBehaviour
             Mathf.Abs(delta.y) >= Mathf.Abs(delta.x) * swipeVerticalBias)
         {
             TryHitNoteType(NoteType.SwipeDown);
+            return;
+        }
+
+        if (duration <= swipeMaxDuration &&
+            Mathf.Abs(delta.x) >= swipeHorizontalMinDistance &&
+            Mathf.Abs(delta.x) >= Mathf.Abs(delta.y) * swipeHorizontalBias)
+        {
+            TryHitNoteType(NoteType.SwipeLeftRight);
         }
     }
 
@@ -422,7 +511,7 @@ public class RhythmGameManager : MonoBehaviour
             return false;
         }
 
-        float timeOffset = Mathf.Abs(musicSource.time - candidate.HitTime);
+        float timeOffset = Mathf.Abs(GetSongTime() - candidate.HitTime);
         if (timeOffset > goodWindow)
         {
             return false;
@@ -459,7 +548,7 @@ public class RhythmGameManager : MonoBehaviour
                     continue;
                 }
 
-                float timeOffset = Mathf.Abs(musicSource.time - note.HitTime);
+                float timeOffset = Mathf.Abs(GetSongTime() - note.HitTime);
                 if (timeOffset < bestTimeOffset)
                 {
                     bestTimeOffset = timeOffset;
@@ -489,7 +578,9 @@ public class RhythmGameManager : MonoBehaviour
 
     private bool IsJudgeableNoteType(NoteType noteType)
     {
-        return noteType == NoteType.Tap || noteType == NoteType.SwipeDown;
+        return noteType == NoteType.Tap ||
+               noteType == NoteType.SwipeDown ||
+               noteType == NoteType.SwipeLeftRight;
     }
 
     private void RegisterJudgment(JudgmentResult result, int lane)
@@ -592,7 +683,7 @@ public class RhythmGameManager : MonoBehaviour
 
     private void EnsureGameplayUi()
     {
-        Canvas canvas = noteParent != null ? noteParent.root.GetComponent<Canvas>() : FindObjectOfType<Canvas>();
+        Canvas canvas = noteParent != null ? noteParent.root.GetComponent<Canvas>() : FindFirstObjectByType<Canvas>();
         if (canvas == null)
         {
             return;
@@ -673,6 +764,170 @@ public class RhythmGameManager : MonoBehaviour
         judgmentLine.sizeDelta = judgmentLineSize;
     }
 
+    private void EnsureLaneVisuals()
+    {
+        if (!generateLaneVisuals || noteParent == null || perspectiveOrigin == null || lanePoints == null || lanePoints.Length == 0)
+        {
+            return;
+        }
+
+        Transform visualsRoot = noteParent.Find("LaneVisuals");
+        if (visualsRoot == null)
+        {
+            GameObject rootObject = new GameObject("LaneVisuals", typeof(RectTransform));
+            RectTransform rootRect = rootObject.GetComponent<RectTransform>();
+            rootRect.SetParent(noteParent, false);
+            rootRect.anchorMin = new Vector2(0.5f, 0.5f);
+            rootRect.anchorMax = new Vector2(0.5f, 0.5f);
+            rootRect.pivot = new Vector2(0.5f, 0.5f);
+            rootRect.anchoredPosition = Vector2.zero;
+            rootRect.sizeDelta = noteParent.rect.size;
+            visualsRoot = rootRect;
+        }
+
+        visualsRoot.SetSiblingIndex(0);
+
+        for (int i = 0; i < lanePoints.Length; i++)
+        {
+            if (lanePoints[i] == null)
+            {
+                continue;
+            }
+
+            EnsureLaneVisual(visualsRoot, i);
+        }
+    }
+
+    private void EnsureLaneVisual(Transform parent, int laneIndex)
+    {
+        string laneObjectName = $"LaneVisual_{laneIndex}";
+        Transform laneTransform = parent.Find(laneObjectName);
+        RectTransform laneRect;
+        Image laneImage;
+
+        if (laneTransform == null)
+        {
+            GameObject laneObject = new GameObject(laneObjectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            laneRect = laneObject.GetComponent<RectTransform>();
+            laneRect.SetParent(parent, false);
+            laneImage = laneObject.GetComponent<Image>();
+        }
+        else
+        {
+            laneRect = laneTransform as RectTransform;
+            laneImage = laneTransform.GetComponent<Image>();
+        }
+
+        ConfigureLaneRect(laneRect, lanePoints[laneIndex].anchoredPosition, laneVisualWidth, laneVisualInsetFromHit);
+        laneImage.color = laneBaseColor;
+        laneImage.raycastTarget = false;
+
+        string edgeObjectName = "Edge";
+        Transform edgeTransform = laneRect.Find(edgeObjectName);
+        RectTransform edgeRect;
+        Image edgeImage;
+
+        if (edgeTransform == null)
+        {
+            GameObject edgeObject = new GameObject(edgeObjectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            edgeRect = edgeObject.GetComponent<RectTransform>();
+            edgeRect.SetParent(laneRect, false);
+            edgeImage = edgeObject.GetComponent<Image>();
+        }
+        else
+        {
+            edgeRect = edgeTransform as RectTransform;
+            edgeImage = edgeTransform.GetComponent<Image>();
+        }
+
+        edgeRect.anchorMin = new Vector2(0f, 0.5f);
+        edgeRect.anchorMax = new Vector2(1f, 0.5f);
+        edgeRect.pivot = new Vector2(0.5f, 0.5f);
+        edgeRect.anchoredPosition = Vector2.zero;
+        edgeRect.sizeDelta = new Vector2(0f, laneVisualWidth);
+        edgeImage.color = laneEdgeColor;
+        edgeImage.raycastTarget = false;
+
+        string glowObjectName = "Glow";
+        Transform glowTransform = laneRect.Find(glowObjectName);
+        RectTransform glowRect;
+        Image glowImage;
+
+        if (glowTransform == null)
+        {
+            GameObject glowObject = new GameObject(glowObjectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            glowRect = glowObject.GetComponent<RectTransform>();
+            glowRect.SetParent(laneRect, false);
+            glowImage = glowObject.GetComponent<Image>();
+        }
+        else
+        {
+            glowRect = glowTransform as RectTransform;
+            glowImage = glowTransform.GetComponent<Image>();
+        }
+
+        glowRect.anchorMin = new Vector2(0.5f, 0.5f);
+        glowRect.anchorMax = new Vector2(0.5f, 0.5f);
+        glowRect.pivot = new Vector2(0.5f, 0.5f);
+        glowRect.anchoredPosition = Vector2.zero;
+        glowRect.sizeDelta = new Vector2(laneRect.sizeDelta.x, laneGlowWidth);
+        glowImage.color = GetLaneColor(laneIndex, 0.82f);
+        glowImage.raycastTarget = false;
+    }
+
+    private void ConfigureLaneRect(RectTransform laneRect, Vector2 targetPosition, float width, float hitInset)
+    {
+        Vector2 originPosition = perspectiveOrigin.anchoredPosition;
+        Vector2 direction = targetPosition - originPosition;
+        float distance = direction.magnitude;
+        if (distance <= 0.01f)
+        {
+            return;
+        }
+
+        Vector2 endPosition = targetPosition - direction.normalized * hitInset;
+        Vector2 laneVector = endPosition - originPosition;
+        float laneLength = laneVector.magnitude;
+        float angle = Mathf.Atan2(laneVector.y, laneVector.x) * Mathf.Rad2Deg;
+
+        laneRect.anchorMin = new Vector2(0.5f, 0.5f);
+        laneRect.anchorMax = new Vector2(0.5f, 0.5f);
+        laneRect.pivot = new Vector2(0.5f, 0.5f);
+        laneRect.anchoredPosition = (originPosition + endPosition) * 0.5f;
+        laneRect.sizeDelta = new Vector2(laneLength, width);
+        laneRect.localRotation = Quaternion.Euler(0f, 0f, angle);
+        laneRect.localScale = Vector3.one;
+    }
+
+    private Color GetLaneColor(int laneIndex, float alpha)
+    {
+        Color color;
+        switch (laneIndex)
+        {
+            case 0:
+                color = new Color(0.69f, 0.27f, 1f, alpha);
+                break;
+            case 1:
+                color = new Color(0.20f, 0.62f, 1f, alpha);
+                break;
+            case 2:
+                color = new Color(1f, 0.25f, 0.22f, alpha);
+                break;
+            case 3:
+                color = new Color(0.32f, 1f, 0.22f, alpha);
+                break;
+            case 4:
+                color = new Color(1f, 0.60f, 0.12f, alpha);
+                break;
+            default:
+                color = new Color(1f, 1f, 1f, alpha);
+                break;
+        }
+
+        color.a = alpha;
+        return color;
+    }
+
     private Text CreateHudText(
         Transform parent,
         string objectName,
@@ -729,5 +984,91 @@ public class RhythmGameManager : MonoBehaviour
         }
 
         return Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+    }
+
+    private Vector2 GetSpawnPosition(Vector2 targetPosition)
+    {
+        if (perspectiveOrigin == null)
+        {
+            return new Vector2(targetPosition.x, targetPosition.y + 900f);
+        }
+
+        return Vector2.Lerp(perspectiveOrigin.anchoredPosition, targetPosition, spawnDepthOnLane);
+    }
+
+    private void LoadChartIfAvailable()
+    {
+        if (!loadChartFromJson)
+        {
+            return;
+        }
+
+        string json = TryLoadChartJson();
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return;
+        }
+
+        ChartFileData loadedChart = JsonUtility.FromJson<ChartFileData>(json);
+        if (loadedChart == null || loadedChart.notes == null || loadedChart.notes.Length == 0)
+        {
+            Debug.LogWarning("Chart JSON was found, but it did not contain any notes.");
+            return;
+        }
+
+        NoteData[] loadedNotes = new NoteData[loadedChart.notes.Length];
+        for (int i = 0; i < loadedChart.notes.Length; i++)
+        {
+            ChartNoteData note = loadedChart.notes[i];
+            loadedNotes[i] = new NoteData(note.time, note.type, note.lane);
+        }
+
+        chart = loadedNotes;
+        Debug.Log($"Loaded chart '{loadedChart.songName}' with {chart.Length} notes.");
+    }
+
+    private string TryLoadChartJson()
+    {
+        string persistentPath = Path.Combine(Application.persistentDataPath, $"{chartFileName}.json");
+        if (File.Exists(persistentPath))
+        {
+            return File.ReadAllText(persistentPath);
+        }
+
+        string assetChartDirectory = Path.Combine(Application.dataPath, "04.Charts");
+        string assetChartPath = Path.Combine(assetChartDirectory, $"{chartFileName}.json");
+        if (File.Exists(assetChartPath))
+        {
+            return File.ReadAllText(assetChartPath);
+        }
+
+        if (chartJsonAsset != null)
+        {
+            return chartJsonAsset.text;
+        }
+
+        return null;
+    }
+
+    private void ClearActiveNotes()
+    {
+        if (activeNotesByLane == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < activeNotesByLane.Length; i++)
+        {
+            List<RhythmNote> laneNotes = activeNotesByLane[i];
+            for (int j = 0; j < laneNotes.Count; j++)
+            {
+                if (laneNotes[j] != null)
+                {
+                    Destroy(laneNotes[j].gameObject);
+                }
+            }
+
+            laneNotes.Clear();
+        }
     }
 }

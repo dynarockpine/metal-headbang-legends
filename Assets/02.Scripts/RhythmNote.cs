@@ -3,6 +3,12 @@ using UnityEngine.UI;
 
 public class RhythmNote : MonoBehaviour
 {
+    private const string TapSpritePath = "Notes/note-tap";
+    private const string SwipeLeftRightSpritePath = "Notes/note-swipeleftright";
+    private const string SwipeDownSpritePath = "Notes/note-swipedown";
+    private const string WindmillSpritePath = "Notes/note-windmill";
+    private const string HoldSpritePath = "Notes/note-hold";
+
     [SerializeField] private Color tapColor = new Color(1f, 0.3f, 0.3f, 1f);
     [SerializeField] private Color swipeColor = new Color(0.3f, 0.7f, 1f, 1f);
     [SerializeField] private Color rotateColor = new Color(0.3f, 1f, 0.3f, 1f);
@@ -10,6 +16,18 @@ public class RhythmNote : MonoBehaviour
     [SerializeField] private Vector2 defaultSize = new Vector2(100f, 100f);
     [SerializeField] private Vector2 swipeDownSize = new Vector2(120f, 150f);
     [SerializeField] private Vector2 holdSize = new Vector2(100f, 180f);
+    [Header("Perspective")]
+    [SerializeField, Range(0.4f, 1.4f)] private float farWidthScaleMultiplier = 0.88f;
+    [SerializeField, Range(0.4f, 1.4f)] private float farHeightScaleMultiplier = 0.68f;
+    [SerializeField, Range(0.4f, 1.4f)] private float hitWidthScaleMultiplier = 1f;
+    [SerializeField, Range(0.4f, 1.4f)] private float hitHeightScaleMultiplier = 1f;
+    [SerializeField, Range(0f, 1f)] private float laneTiltMultiplier = 0.3f;
+    [SerializeField, Range(0f, 35f)] private float maxLaneTiltDegrees = 18f;
+    [SerializeField] private Sprite tapSprite;
+    [SerializeField] private Sprite swipeLeftRightSprite;
+    [SerializeField] private Sprite swipeDownSprite;
+    [SerializeField] private Sprite windmillSprite;
+    [SerializeField] private Sprite holdSprite;
 
     private RectTransform rectTransform;
     private Image noteImage;
@@ -18,10 +36,13 @@ public class RhythmNote : MonoBehaviour
     private AudioSource musicSource;
     private float hitTime;
     private float spawnLeadTime;
+    private float spawnScale;
+    private float hitScale;
     private Vector2 spawnPosition;
     private Vector2 targetPosition;
     private RhythmGameManager.NoteType noteType;
     private int lane;
+    private float laneTiltDegrees;
     private bool initialized;
     private bool resolved;
 
@@ -29,7 +50,7 @@ public class RhythmNote : MonoBehaviour
     public RhythmGameManager.NoteType NoteType => noteType;
     public int Lane => lane;
 
-    public void Initialize(RhythmGameManager manager, AudioSource source, float noteTime, float leadTime, Vector2 startPosition, Vector2 endPosition, RhythmGameManager.NoteType assignedNoteType, int assignedLane)
+    public void Initialize(RhythmGameManager manager, AudioSource source, float noteTime, float leadTime, Vector2 startPosition, Vector2 endPosition, float startScale, float endScale, RhythmGameManager.NoteType assignedNoteType, int assignedLane)
     {
         rectTransform = GetComponent<RectTransform>();
         noteImage = GetComponent<Image>();
@@ -37,6 +58,8 @@ public class RhythmNote : MonoBehaviour
         musicSource = source;
         hitTime = noteTime;
         spawnLeadTime = Mathf.Max(0.01f, leadTime);
+        spawnScale = Mathf.Max(0.01f, startScale);
+        hitScale = Mathf.Max(spawnScale, endScale);
         spawnPosition = startPosition;
         targetPosition = endPosition;
         noteType = assignedNoteType;
@@ -47,11 +70,13 @@ public class RhythmNote : MonoBehaviour
         if (rectTransform != null)
         {
             rectTransform.anchoredPosition = spawnPosition;
+            laneTiltDegrees = CalculateLaneTiltDegrees(spawnPosition, targetPosition);
+            ApplyPerspectiveTransform(0f);
         }
 
         if (noteImage != null)
         {
-            noteImage.color = GetColor(assignedNoteType);
+            noteImage.preserveAspect = true;
         }
 
         ApplyVisualByNoteType(assignedNoteType);
@@ -64,11 +89,12 @@ public class RhythmNote : MonoBehaviour
             return;
         }
 
-        float progress = 1f - ((hitTime - musicSource.time) / spawnLeadTime);
+        float songTime = gameManager != null ? gameManager.GetSongTime() : musicSource.time;
+        float progress = 1f - ((hitTime - songTime) / spawnLeadTime);
         progress = Mathf.Clamp01(progress);
-        rectTransform.anchoredPosition = Vector2.Lerp(spawnPosition, targetPosition, progress);
+        ApplyPerspectiveTransform(progress);
 
-        if (gameManager != null && musicSource.time > hitTime + gameManager.GoodWindow)
+        if (gameManager != null && songTime > hitTime + gameManager.GoodWindow)
         {
             Resolve(false);
         }
@@ -118,6 +144,22 @@ public class RhythmNote : MonoBehaviour
             rectTransform.sizeDelta = GetSizeForNoteType(assignedNoteType);
         }
 
+        EnsureNoteSpritesLoaded();
+
+        if (noteImage != null)
+        {
+            Sprite noteSprite = GetSpriteForNoteType(assignedNoteType);
+            if (noteSprite != null)
+            {
+                noteImage.sprite = noteSprite;
+                noteImage.color = Color.white;
+                RemoveSymbolText();
+                return;
+            }
+
+            noteImage.color = GetColor(assignedNoteType);
+        }
+
         switch (assignedNoteType)
         {
             case RhythmGameManager.NoteType.SwipeDown:
@@ -136,6 +178,85 @@ public class RhythmNote : MonoBehaviour
                 RemoveSymbolText();
                 break;
         }
+    }
+
+    private void EnsureNoteSpritesLoaded()
+    {
+        if (tapSprite == null)
+        {
+            tapSprite = Resources.Load<Sprite>(TapSpritePath);
+        }
+
+        if (swipeLeftRightSprite == null)
+        {
+            swipeLeftRightSprite = Resources.Load<Sprite>(SwipeLeftRightSpritePath);
+        }
+
+        if (swipeDownSprite == null)
+        {
+            swipeDownSprite = Resources.Load<Sprite>(SwipeDownSpritePath);
+        }
+
+        if (windmillSprite == null)
+        {
+            windmillSprite = Resources.Load<Sprite>(WindmillSpritePath);
+        }
+
+        if (holdSprite == null)
+        {
+            holdSprite = Resources.Load<Sprite>(HoldSpritePath);
+        }
+    }
+
+    private Sprite GetSpriteForNoteType(RhythmGameManager.NoteType assignedNoteType)
+    {
+        switch (assignedNoteType)
+        {
+            case RhythmGameManager.NoteType.SwipeLeftRight:
+                return swipeLeftRightSprite;
+            case RhythmGameManager.NoteType.SwipeDown:
+                return swipeDownSprite;
+            case RhythmGameManager.NoteType.Windmill:
+                return windmillSprite;
+            case RhythmGameManager.NoteType.Hold:
+                return holdSprite;
+            default:
+                return tapSprite;
+        }
+    }
+
+    private void ApplyPerspectiveTransform(float progress)
+    {
+        if (rectTransform == null)
+        {
+            return;
+        }
+
+        rectTransform.anchoredPosition = Vector2.Lerp(spawnPosition, targetPosition, progress);
+
+        float uniformScale = Mathf.Lerp(spawnScale, hitScale, progress);
+        float widthScale = Mathf.Lerp(farWidthScaleMultiplier, hitWidthScaleMultiplier, progress);
+        float heightScale = Mathf.Lerp(farHeightScaleMultiplier, hitHeightScaleMultiplier, progress);
+
+        rectTransform.localScale = new Vector3(
+            uniformScale * widthScale,
+            uniformScale * heightScale,
+            1f);
+
+        rectTransform.localRotation = Quaternion.Euler(0f, 0f, laneTiltDegrees);
+    }
+
+    private float CalculateLaneTiltDegrees(Vector2 startPosition, Vector2 endPosition)
+    {
+        Vector2 laneVector = endPosition - startPosition;
+        if (laneVector.sqrMagnitude <= 0.001f)
+        {
+            return 0f;
+        }
+
+        float horizontalRatio = laneVector.x / Mathf.Max(Mathf.Abs(laneVector.y), 1f);
+        float tilt = -horizontalRatio * 90f * laneTiltMultiplier;
+        return Mathf.Clamp(tilt, -maxLaneTiltDegrees, maxLaneTiltDegrees);
     }
 
     private Vector2 GetSizeForNoteType(RhythmGameManager.NoteType assignedNoteType)
