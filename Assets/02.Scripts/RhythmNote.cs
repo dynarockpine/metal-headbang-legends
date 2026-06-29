@@ -21,8 +21,7 @@ public class RhythmNote : MonoBehaviour
     [SerializeField, Range(0.4f, 1.4f)] private float farHeightScaleMultiplier = 0.68f;
     [SerializeField, Range(0.4f, 1.4f)] private float hitWidthScaleMultiplier = 1f;
     [SerializeField, Range(0.4f, 1.4f)] private float hitHeightScaleMultiplier = 1f;
-    [SerializeField, Range(0f, 1f)] private float laneTiltMultiplier = 0.3f;
-    [SerializeField, Range(0f, 35f)] private float maxLaneTiltDegrees = 18f;
+    [SerializeField, Range(-80f, 80f)] private float noteTiltXDegrees = 55f;
     [SerializeField] private Sprite tapSprite;
     [SerializeField] private Sprite swipeLeftRightSprite;
     [SerializeField] private Sprite swipeDownSprite;
@@ -42,7 +41,6 @@ public class RhythmNote : MonoBehaviour
     private Vector2 targetPosition;
     private RhythmGameManager.NoteType noteType;
     private int lane;
-    private float laneTiltDegrees;
     private bool initialized;
     private bool resolved;
 
@@ -70,7 +68,6 @@ public class RhythmNote : MonoBehaviour
         if (rectTransform != null)
         {
             rectTransform.anchoredPosition = spawnPosition;
-            laneTiltDegrees = CalculateLaneTiltDegrees(spawnPosition, targetPosition);
             ApplyPerspectiveTransform(0f);
         }
 
@@ -243,20 +240,7 @@ public class RhythmNote : MonoBehaviour
             uniformScale * heightScale,
             1f);
 
-        rectTransform.localRotation = Quaternion.Euler(0f, 0f, laneTiltDegrees);
-    }
-
-    private float CalculateLaneTiltDegrees(Vector2 startPosition, Vector2 endPosition)
-    {
-        Vector2 laneVector = endPosition - startPosition;
-        if (laneVector.sqrMagnitude <= 0.001f)
-        {
-            return 0f;
-        }
-
-        float horizontalRatio = laneVector.x / Mathf.Max(Mathf.Abs(laneVector.y), 1f);
-        float tilt = -horizontalRatio * 90f * laneTiltMultiplier;
-        return Mathf.Clamp(tilt, -maxLaneTiltDegrees, maxLaneTiltDegrees);
+        rectTransform.localRotation = Quaternion.Euler(noteTiltXDegrees, 0f, 0f);
     }
 
     private Vector2 GetSizeForNoteType(RhythmGameManager.NoteType assignedNoteType)

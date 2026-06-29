@@ -458,7 +458,7 @@ MonoBehaviour:
   swipeHorizontalBias: 1.2
   spawnDepthOnLane: 0.04
   noteSpawnScale: 0.32
-  noteHitScale: 1.5
+  noteHitScale: 1.669
   generateLaneVisuals: 0
   laneVisualWidth: 140
   laneGlowWidth: 24
