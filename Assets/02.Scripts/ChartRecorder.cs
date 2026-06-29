@@ -218,15 +218,7 @@ public class ChartRecorder : MonoBehaviour
         };
 
         string json = JsonUtility.ToJson(chartFile, true);
-        string savePath = GetSavePath();
-        string directoryPath = Path.GetDirectoryName(savePath);
-
-        if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath))
-        {
-            Directory.CreateDirectory(directoryPath);
-        }
-
-        File.WriteAllText(savePath, json);
+        List<string> savedPaths = SaveChartJson(json);
         isRecording = false;
         isFullRewriteMode = false;
         isPunchInActive = false;
@@ -241,7 +233,8 @@ public class ChartRecorder : MonoBehaviour
         }
 #endif
 
-        Debug.Log($"Chart saved: {savePath} ({notesToSave.Count} notes)");
+        rhythmGameManager?.ReloadChartFromConfiguredSource(true);
+        Debug.Log($"Chart saved: {string.Join(", ", savedPaths)} ({notesToSave.Count} notes)");
     }
 
     private void RecordNote(RhythmGameManager.NoteType noteType, int lane)
@@ -333,38 +326,83 @@ public class ChartRecorder : MonoBehaviour
 
     private string TryLoadChartJson()
     {
-        string preferredSavePath = GetSavePath();
-        if (File.Exists(preferredSavePath))
-        {
-            return File.ReadAllText(preferredSavePath);
-        }
-
-        string persistentPath = Path.Combine(Application.persistentDataPath, $"{songName}.json");
-        if (File.Exists(persistentPath))
-        {
-            return File.ReadAllText(persistentPath);
-        }
-
 #if UNITY_EDITOR
-        string assetChartPath = Path.Combine(Application.dataPath, "04.Charts", $"{songName}.json");
+        string resourcesChartPath = GetEditorResourcesChartPath();
+        if (File.Exists(resourcesChartPath))
+        {
+            return File.ReadAllText(resourcesChartPath);
+        }
+
+        string assetChartPath = GetEditorChartsPath();
         if (File.Exists(assetChartPath))
         {
             return File.ReadAllText(assetChartPath);
         }
 #endif
 
+        string persistentPath = GetPersistentChartPath();
+        if (File.Exists(persistentPath))
+        {
+            return File.ReadAllText(persistentPath);
+        }
+
         return null;
     }
 
-    private string GetSavePath()
+    private List<string> SaveChartJson(string json)
     {
+        List<string> savedPaths = new List<string>();
+
 #if UNITY_EDITOR
         if (saveToAssetsChartsFolderInEditor)
         {
-            return Path.Combine(Application.dataPath, "04.Charts", $"{songName}.json");
+            SaveChartJsonToPath(GetEditorChartsPath(), json);
+            savedPaths.Add(GetEditorChartsPath());
+
+            SaveChartJsonToPath(GetEditorResourcesChartPath(), json);
+            savedPaths.Add(GetEditorResourcesChartPath());
+            return savedPaths;
         }
 #endif
 
+        string persistentPath = GetPersistentChartPath();
+        SaveChartJsonToPath(persistentPath, json);
+        savedPaths.Add(persistentPath);
+        return savedPaths;
+    }
+
+    private void SaveChartJsonToPath(string savePath, string json)
+    {
+        string directoryPath = Path.GetDirectoryName(savePath);
+
+        if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath))
+        {
+            Directory.CreateDirectory(directoryPath);
+        }
+
+        File.WriteAllText(savePath, json);
+    }
+
+    private string GetEditorChartsPath()
+    {
+#if UNITY_EDITOR
+        return Path.Combine(Application.dataPath, "04.Charts", $"{songName}.json");
+#else
+        return null;
+#endif
+    }
+
+    private string GetEditorResourcesChartPath()
+    {
+#if UNITY_EDITOR
+        return Path.Combine(Application.dataPath, "Resources", "Charts", $"{songName}.json");
+#else
+        return null;
+#endif
+    }
+
+    private string GetPersistentChartPath()
+    {
         return Path.Combine(Application.persistentDataPath, $"{songName}.json");
     }
 }

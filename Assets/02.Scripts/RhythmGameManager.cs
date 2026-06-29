@@ -67,6 +67,10 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField, Range(0.1f, 1f)] private float noteSpawnScale = 0.32f;
     [SerializeField, Range(0.5f, 2f)] private float noteHitScale = 1f;
 
+    [Header("Performance")]
+    [SerializeField] private int targetFrameRate = 60;
+    [SerializeField] private bool disableVSync = true;
+
     [Header("Lane Visuals")]
     [SerializeField] private bool generateLaneVisuals = true;
     [SerializeField] private float laneVisualWidth = 140f;
@@ -130,6 +134,8 @@ public class RhythmGameManager : MonoBehaviour
 
     private void Awake()
     {
+        ApplyPerformanceSettings();
+
         activeNotesByLane = new List<RhythmNote>[5];
         for (int i = 0; i < activeNotesByLane.Length; i++)
         {
@@ -145,8 +151,20 @@ public class RhythmGameManager : MonoBehaviour
         }
     }
 
+    public bool ReloadChartFromConfiguredSource(bool restartPlayback)
+    {
+        bool loaded = LoadChartIfAvailable();
+        if (loaded && restartPlayback)
+        {
+            RestartChartPlayback(true);
+        }
+
+        return loaded;
+    }
+
     private void Start()
     {
+        ApplyPerformanceSettings();
         ResolveReferences();
         EnsureJudgmentLineVisual();
         SyncLanePointsToJudgmentLine();
@@ -190,6 +208,7 @@ public class RhythmGameManager : MonoBehaviour
 
     private void OnValidate()
     {
+        ApplyPerformanceSettings();
         ResolveReferences();
         if (SyncLanePointsToJudgmentLine())
         {
@@ -882,15 +901,7 @@ public class RhythmGameManager : MonoBehaviour
         Transform areasRoot = noteParent.Find("LaneTouchAreas");
         if (areasRoot == null)
         {
-            GameObject areasRootObject = new GameObject("LaneTouchAreas", typeof(RectTransform));
-            RectTransform areasRootRect = areasRootObject.GetComponent<RectTransform>();
-            areasRootRect.SetParent(noteParent, false);
-            areasRootRect.anchorMin = new Vector2(0.5f, 0.5f);
-            areasRootRect.anchorMax = new Vector2(0.5f, 0.5f);
-            areasRootRect.pivot = new Vector2(0.5f, 0.5f);
-            areasRootRect.anchoredPosition = Vector2.zero;
-            areasRootRect.sizeDelta = noteParent.rect.size;
-            areasRoot = areasRootRect;
+            return;
         }
 
         areasRoot.SetAsLastSibling();
@@ -915,20 +926,16 @@ public class RhythmGameManager : MonoBehaviour
     {
         string areaObjectName = $"LaneTouchArea_{laneIndex}";
         Transform existing = parent.Find(areaObjectName);
-        RectTransform areaRect;
-        Image areaImage;
-
         if (existing == null)
         {
-            GameObject areaObject = new GameObject(areaObjectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-            areaRect = areaObject.GetComponent<RectTransform>();
-            areaRect.SetParent(parent, false);
-            areaImage = areaObject.GetComponent<Image>();
+            return null;
         }
-        else
+
+        RectTransform areaRect = existing as RectTransform;
+        Image areaImage = existing.GetComponent<Image>();
+        if (areaRect == null || areaImage == null)
         {
-            areaRect = existing as RectTransform;
-            areaImage = existing.GetComponent<Image>();
+            return null;
         }
 
         areaRect.anchorMin = new Vector2(0.5f, 0.5f);
@@ -1340,24 +1347,24 @@ public class RhythmGameManager : MonoBehaviour
         return Vector2.Lerp(perspectiveOrigin.anchoredPosition, targetPosition, spawnDepthOnLane);
     }
 
-    private void LoadChartIfAvailable()
+    private bool LoadChartIfAvailable()
     {
         if (!loadChartFromJson)
         {
-            return;
+            return false;
         }
 
         string json = TryLoadChartJson();
         if (string.IsNullOrWhiteSpace(json))
         {
-            return;
+            return false;
         }
 
         ChartFileData loadedChart = JsonUtility.FromJson<ChartFileData>(json);
         if (loadedChart == null || loadedChart.notes == null || loadedChart.notes.Length == 0)
         {
             Debug.LogWarning("Chart JSON was found, but it did not contain any notes.");
-            return;
+            return false;
         }
 
         NoteData[] loadedNotes = new NoteData[loadedChart.notes.Length];
@@ -1372,29 +1379,58 @@ public class RhythmGameManager : MonoBehaviour
 
         chart = loadedNotes;
         Debug.Log($"Loaded chart '{loadedChart.songName}' with {chart.Length} notes.");
+        return true;
     }
 
     private string TryLoadChartJson()
     {
-        string persistentPath = Path.Combine(Application.persistentDataPath, $"{chartFileName}.json");
-        if (File.Exists(persistentPath))
-        {
-            return File.ReadAllText(persistentPath);
-        }
-
-        string assetChartDirectory = Path.Combine(Application.dataPath, "04.Charts");
-        string assetChartPath = Path.Combine(assetChartDirectory, $"{chartFileName}.json");
-        if (File.Exists(assetChartPath))
-        {
-            return File.ReadAllText(assetChartPath);
-        }
-
+#if UNITY_EDITOR
         if (chartJsonAsset != null)
         {
+            Debug.Log($"Loaded chart JSON from assigned TextAsset: {chartJsonAsset.name}");
             return chartJsonAsset.text;
         }
 
+        TextAsset resourceChartInEditor = Resources.Load<TextAsset>($"Charts/{chartFileName}");
+        if (resourceChartInEditor != null)
+        {
+            Debug.Log($"Loaded chart JSON from Resources/Charts/{chartFileName}");
+            return resourceChartInEditor.text;
+        }
+
+        string editorAssetChartPath = Path.Combine(Application.dataPath, "04.Charts", $"{chartFileName}.json");
+        if (File.Exists(editorAssetChartPath))
+        {
+            Debug.Log($"Loaded chart JSON from editor asset path: {editorAssetChartPath}");
+            return File.ReadAllText(editorAssetChartPath);
+        }
+#endif
+
+        string persistentPath = Path.Combine(Application.persistentDataPath, $"{chartFileName}.json");
+        if (File.Exists(persistentPath))
+        {
+            Debug.Log($"Loaded chart JSON from persistent data: {persistentPath}");
+            return File.ReadAllText(persistentPath);
+        }
+
+        TextAsset resourceChart = Resources.Load<TextAsset>($"Charts/{chartFileName}");
+        if (resourceChart != null)
+        {
+            Debug.Log($"Loaded chart JSON from Resources/Charts/{chartFileName}");
+            return resourceChart.text;
+        }
+
         return null;
+    }
+
+    private void ApplyPerformanceSettings()
+    {
+        if (disableVSync)
+        {
+            QualitySettings.vSyncCount = 0;
+        }
+
+        Application.targetFrameRate = Mathf.Max(30, targetFrameRate);
     }
 
     private void ClearActiveNotes()
