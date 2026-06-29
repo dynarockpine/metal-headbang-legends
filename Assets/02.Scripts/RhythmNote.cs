@@ -21,7 +21,6 @@ public class RhythmNote : MonoBehaviour
     [SerializeField, Range(0.4f, 1.4f)] private float hitHeightScaleMultiplier = 1f;
     [SerializeField, Range(-80f, 80f)] private float noteTiltXDegrees = 55f;
     [SerializeField, Range(0.05f, 1f)] private float missDespawnDelay = 0.3f;
-    [SerializeField, Range(0.05f, 0.5f)] private float missOvershootDistance = 0.18f;
     [SerializeField] private Sprite lane1Sprite;
     [SerializeField] private Sprite lane2Sprite;
     [SerializeField] private Sprite lane3Sprite;
@@ -39,6 +38,8 @@ public class RhythmNote : MonoBehaviour
     private float hitScale;
     private Vector2 spawnPosition;
     private Vector2 targetPosition;
+    private Vector2 travelDirection;
+    private float travelDistance;
     private RhythmGameManager.NoteType noteType;
     private int lane;
     private bool initialized;
@@ -61,6 +62,9 @@ public class RhythmNote : MonoBehaviour
         hitScale = Mathf.Max(spawnScale, endScale);
         spawnPosition = startPosition;
         targetPosition = endPosition;
+        Vector2 travelVector = targetPosition - spawnPosition;
+        travelDistance = travelVector.magnitude;
+        travelDirection = travelDistance > 0.001f ? travelVector / travelDistance : Vector2.down;
         noteType = assignedNoteType;
         lane = assignedLane;
         initialized = true;
@@ -69,13 +73,14 @@ public class RhythmNote : MonoBehaviour
 
         if (rectTransform != null)
         {
+            rectTransform.pivot = new Vector2(0.5f, 0f);
             rectTransform.anchoredPosition = spawnPosition;
             ApplyPerspectiveTransform(0f);
         }
 
         if (noteImage != null)
         {
-            noteImage.preserveAspect = true;
+            noteImage.preserveAspect = false;
         }
 
         ApplyVisual();
@@ -230,7 +235,7 @@ public class RhythmNote : MonoBehaviour
             return;
         }
 
-        rectTransform.anchoredPosition = Vector2.LerpUnclamped(spawnPosition, targetPosition, progress);
+        rectTransform.anchoredPosition = GetPositionAtProgress(progress);
 
         float scaleProgress = Mathf.Clamp01(progress);
         float uniformScale = Mathf.Lerp(spawnScale, hitScale, scaleProgress);
@@ -247,14 +252,19 @@ public class RhythmNote : MonoBehaviour
 
     private float GetVisualProgress(float songTime)
     {
-        if (songTime <= hitTime)
+        float elapsedSinceSpawn = songTime - (hitTime - spawnLeadTime);
+        return elapsedSinceSpawn / spawnLeadTime;
+    }
+
+    private Vector2 GetPositionAtProgress(float progress)
+    {
+        if (travelDistance <= 0.001f)
         {
-            float preHitProgress = 1f - ((hitTime - songTime) / spawnLeadTime);
-            return Mathf.Clamp01(preHitProgress);
+            return targetPosition;
         }
 
-        float postHitProgress = Mathf.Clamp01((songTime - hitTime) / missDespawnDelay);
-        return 1f + (postHitProgress * missOvershootDistance);
+        float traveledDistance = Mathf.Max(0f, progress) * travelDistance;
+        return spawnPosition + (travelDirection * traveledDistance);
     }
 
     private void EnsureSymbolText(string symbol, int fontSize, Vector2 anchoredPosition)

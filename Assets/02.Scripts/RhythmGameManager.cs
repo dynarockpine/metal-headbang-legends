@@ -61,6 +61,8 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField] private float goodWindow = 0.16f;
     [SerializeField] private float tapMaxDuration = 0.25f;
     [SerializeField] private float tapMaxMovement = 60f;
+    [SerializeField] private float globalSongTimeOffsetSeconds = 0f;
+    [SerializeField] private float iPhoneSongTimeOffsetSeconds = -0.045f;
 
     [Header("Lane Perspective")]
     [SerializeField, Range(0f, 0.4f)] private float spawnDepthOnLane = 0.04f;
@@ -297,10 +299,23 @@ public class RhythmGameManager : MonoBehaviour
         AudioClip clip = musicSource.clip;
         if (clip != null && clip.frequency > 0 && musicSource.timeSamples >= 0)
         {
-            return (float)musicSource.timeSamples / clip.frequency;
+            float rawSongTime = (float)musicSource.timeSamples / clip.frequency;
+            return Mathf.Max(0f, rawSongTime + GetPlatformSongTimeOffset());
         }
 
         return 0f;
+    }
+
+    private float GetPlatformSongTimeOffset()
+    {
+        float offset = globalSongTimeOffsetSeconds;
+
+        if (Application.platform == RuntimePlatform.IPhonePlayer)
+        {
+            offset += iPhoneSongTimeOffsetSeconds;
+        }
+
+        return offset;
     }
 
     public void RestartChartPlayback(bool restartMusic)
