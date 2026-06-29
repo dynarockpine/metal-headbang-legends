@@ -3,30 +3,30 @@ using UnityEngine.UI;
 
 public class RhythmNote : MonoBehaviour
 {
-    private const string TapSpritePath = "Notes/note-tap";
-    private const string SwipeLeftRightSpritePath = "Notes/note-swipeleftright";
-    private const string SwipeDownSpritePath = "Notes/note-swipedown";
-    private const string WindmillSpritePath = "Notes/note-windmill";
-    private const string HoldSpritePath = "Notes/note-hold";
+    private const string Lane1SpritePath = "Notes/note-purple";
+    private const string Lane2SpritePath = "Notes/note-blue";
+    private const string Lane3SpritePath = "Notes/note-red";
+    private const string Lane4SpritePath = "Notes/note-green";
+    private const string Lane5SpritePath = "Notes/note-yellow";
 
     [SerializeField] private Color tapColor = new Color(1f, 0.3f, 0.3f, 1f);
     [SerializeField] private Color swipeColor = new Color(0.3f, 0.7f, 1f, 1f);
     [SerializeField] private Color rotateColor = new Color(0.3f, 1f, 0.3f, 1f);
     [SerializeField] private Color holdColor = new Color(1f, 0.7f, 0.2f, 1f);
-    [SerializeField] private Vector2 defaultSize = new Vector2(100f, 100f);
-    [SerializeField] private Vector2 swipeDownSize = new Vector2(120f, 150f);
-    [SerializeField] private Vector2 holdSize = new Vector2(100f, 180f);
+    [SerializeField] private Vector2 noteSize = new Vector2(120f, 120f);
     [Header("Perspective")]
     [SerializeField, Range(0.4f, 1.4f)] private float farWidthScaleMultiplier = 0.88f;
     [SerializeField, Range(0.4f, 1.4f)] private float farHeightScaleMultiplier = 0.68f;
     [SerializeField, Range(0.4f, 1.4f)] private float hitWidthScaleMultiplier = 1f;
     [SerializeField, Range(0.4f, 1.4f)] private float hitHeightScaleMultiplier = 1f;
     [SerializeField, Range(-80f, 80f)] private float noteTiltXDegrees = 55f;
-    [SerializeField] private Sprite tapSprite;
-    [SerializeField] private Sprite swipeLeftRightSprite;
-    [SerializeField] private Sprite swipeDownSprite;
-    [SerializeField] private Sprite windmillSprite;
-    [SerializeField] private Sprite holdSprite;
+    [SerializeField, Range(0.05f, 1f)] private float missDespawnDelay = 0.3f;
+    [SerializeField, Range(0.05f, 0.5f)] private float missOvershootDistance = 0.18f;
+    [SerializeField] private Sprite lane1Sprite;
+    [SerializeField] private Sprite lane2Sprite;
+    [SerializeField] private Sprite lane3Sprite;
+    [SerializeField] private Sprite lane4Sprite;
+    [SerializeField] private Sprite lane5Sprite;
 
     private RectTransform rectTransform;
     private Image noteImage;
@@ -43,6 +43,7 @@ public class RhythmNote : MonoBehaviour
     private int lane;
     private bool initialized;
     private bool resolved;
+    private bool missRegistered;
 
     public float HitTime => hitTime;
     public RhythmGameManager.NoteType NoteType => noteType;
@@ -64,6 +65,7 @@ public class RhythmNote : MonoBehaviour
         lane = assignedLane;
         initialized = true;
         resolved = false;
+        missRegistered = false;
 
         if (rectTransform != null)
         {
@@ -76,7 +78,7 @@ public class RhythmNote : MonoBehaviour
             noteImage.preserveAspect = true;
         }
 
-        ApplyVisualByNoteType(assignedNoteType);
+        ApplyVisual();
     }
 
     private void Update()
@@ -87,13 +89,18 @@ public class RhythmNote : MonoBehaviour
         }
 
         float songTime = gameManager != null ? gameManager.GetSongTime() : musicSource.time;
-        float progress = 1f - ((hitTime - songTime) / spawnLeadTime);
-        progress = Mathf.Clamp01(progress);
+        float progress = GetVisualProgress(songTime);
         ApplyPerspectiveTransform(progress);
 
-        if (gameManager != null && songTime > hitTime + gameManager.GoodWindow)
+        float missTime = hitTime + (gameManager != null ? gameManager.GoodWindow : 0f);
+        if (!missRegistered && songTime > missTime)
         {
-            Resolve(false);
+            RegisterMiss();
+        }
+
+        if (missRegistered && songTime > missTime + missDespawnDelay)
+        {
+            Destroy(gameObject);
         }
     }
 
@@ -118,107 +125,101 @@ public class RhythmNote : MonoBehaviour
         Destroy(gameObject);
     }
 
-    private Color GetColor(RhythmGameManager.NoteType noteType)
+    private void RegisterMiss()
     {
-        switch (noteType)
+        if (missRegistered)
         {
-            case RhythmGameManager.NoteType.SwipeLeftRight:
-            case RhythmGameManager.NoteType.SwipeDown:
-                return swipeColor;
-            case RhythmGameManager.NoteType.Windmill:
-                return rotateColor;
-            case RhythmGameManager.NoteType.Hold:
-                return holdColor;
-            default:
-                return tapColor;
+            return;
+        }
+
+        missRegistered = true;
+        if (gameManager != null)
+        {
+            gameManager.NotifyNoteResolved(this, false);
         }
     }
 
-    private void ApplyVisualByNoteType(RhythmGameManager.NoteType assignedNoteType)
+    private Color GetLaneColor(int laneIndex)
+    {
+        switch (laneIndex)
+        {
+            case 0:
+                return new Color(0.69f, 0.27f, 1f, 1f);
+            case 1:
+                return swipeColor;
+            case 2:
+                return tapColor;
+            case 3:
+                return rotateColor;
+            case 4:
+                return holdColor;
+            default:
+                return Color.white;
+        }
+    }
+
+    private void ApplyVisual()
     {
         if (rectTransform != null)
         {
-            rectTransform.sizeDelta = GetSizeForNoteType(assignedNoteType);
+            rectTransform.sizeDelta = noteSize;
         }
-
-        EnsureNoteSpritesLoaded();
 
         if (noteImage != null)
         {
-            Sprite noteSprite = GetSpriteForNoteType(assignedNoteType);
-            if (noteSprite != null)
-            {
-                noteImage.sprite = noteSprite;
-                noteImage.color = Color.white;
-                RemoveSymbolText();
-                return;
-            }
-
-            noteImage.color = GetColor(assignedNoteType);
+            EnsureNoteSpritesLoaded();
+            Sprite noteSprite = GetSpriteForLane(lane);
+            noteImage.sprite = noteSprite;
+            noteImage.color = noteSprite != null ? Color.white : GetLaneColor(lane);
         }
 
-        switch (assignedNoteType)
-        {
-            case RhythmGameManager.NoteType.SwipeDown:
-                EnsureSymbolText("↓", 88, new Vector2(0f, -2f));
-                break;
-            case RhythmGameManager.NoteType.Windmill:
-                EnsureSymbolText("↻", 84, new Vector2(0f, 0f));
-                break;
-            case RhythmGameManager.NoteType.SwipeLeftRight:
-                EnsureSymbolText("↔", 78, new Vector2(0f, 0f));
-                break;
-            case RhythmGameManager.NoteType.Hold:
-                EnsureSymbolText("!", 90, new Vector2(0f, 0f));
-                break;
-            default:
-                RemoveSymbolText();
-                break;
-        }
+        RemoveSymbolText();
     }
 
     private void EnsureNoteSpritesLoaded()
     {
-        if (tapSprite == null)
+        if (lane1Sprite == null)
         {
-            tapSprite = Resources.Load<Sprite>(TapSpritePath);
+            lane1Sprite = Resources.Load<Sprite>(Lane1SpritePath);
         }
 
-        if (swipeLeftRightSprite == null)
+        if (lane2Sprite == null)
         {
-            swipeLeftRightSprite = Resources.Load<Sprite>(SwipeLeftRightSpritePath);
+            lane2Sprite = Resources.Load<Sprite>(Lane2SpritePath);
         }
 
-        if (swipeDownSprite == null)
+        if (lane3Sprite == null)
         {
-            swipeDownSprite = Resources.Load<Sprite>(SwipeDownSpritePath);
+            lane3Sprite = Resources.Load<Sprite>(Lane3SpritePath);
         }
 
-        if (windmillSprite == null)
+        if (lane4Sprite == null)
         {
-            windmillSprite = Resources.Load<Sprite>(WindmillSpritePath);
+            lane4Sprite = Resources.Load<Sprite>(Lane4SpritePath);
         }
 
-        if (holdSprite == null)
+        if (lane5Sprite == null)
         {
-            holdSprite = Resources.Load<Sprite>(HoldSpritePath);
+            lane5Sprite = Resources.Load<Sprite>(Lane5SpritePath);
         }
     }
 
-    private Sprite GetSpriteForNoteType(RhythmGameManager.NoteType assignedNoteType)
+    private Sprite GetSpriteForLane(int laneIndex)
     {
-        switch (assignedNoteType)
+        switch (laneIndex)
         {
-            case RhythmGameManager.NoteType.SwipeLeftRight:
-                return swipeLeftRightSprite;
-            case RhythmGameManager.NoteType.SwipeDown:
-                return swipeDownSprite;
-            case RhythmGameManager.NoteType.Windmill:
-                return windmillSprite;
-            case RhythmGameManager.NoteType.Hold:
-                return holdSprite;
+            case 0:
+                return lane1Sprite;
+            case 1:
+                return lane2Sprite;
+            case 2:
+                return lane3Sprite;
+            case 3:
+                return lane4Sprite;
+            case 4:
+                return lane5Sprite;
             default:
-                return tapSprite;
+                return null;
         }
     }
 
@@ -229,11 +230,12 @@ public class RhythmNote : MonoBehaviour
             return;
         }
 
-        rectTransform.anchoredPosition = Vector2.Lerp(spawnPosition, targetPosition, progress);
+        rectTransform.anchoredPosition = Vector2.LerpUnclamped(spawnPosition, targetPosition, progress);
 
-        float uniformScale = Mathf.Lerp(spawnScale, hitScale, progress);
-        float widthScale = Mathf.Lerp(farWidthScaleMultiplier, hitWidthScaleMultiplier, progress);
-        float heightScale = Mathf.Lerp(farHeightScaleMultiplier, hitHeightScaleMultiplier, progress);
+        float scaleProgress = Mathf.Clamp01(progress);
+        float uniformScale = Mathf.Lerp(spawnScale, hitScale, scaleProgress);
+        float widthScale = Mathf.Lerp(farWidthScaleMultiplier, hitWidthScaleMultiplier, scaleProgress);
+        float heightScale = Mathf.Lerp(farHeightScaleMultiplier, hitHeightScaleMultiplier, scaleProgress);
 
         rectTransform.localScale = new Vector3(
             uniformScale * widthScale,
@@ -243,17 +245,16 @@ public class RhythmNote : MonoBehaviour
         rectTransform.localRotation = Quaternion.Euler(noteTiltXDegrees, 0f, 0f);
     }
 
-    private Vector2 GetSizeForNoteType(RhythmGameManager.NoteType assignedNoteType)
+    private float GetVisualProgress(float songTime)
     {
-        switch (assignedNoteType)
+        if (songTime <= hitTime)
         {
-            case RhythmGameManager.NoteType.SwipeDown:
-                return swipeDownSize;
-            case RhythmGameManager.NoteType.Hold:
-                return holdSize;
-            default:
-                return defaultSize;
+            float preHitProgress = 1f - ((hitTime - songTime) / spawnLeadTime);
+            return Mathf.Clamp01(preHitProgress);
         }
+
+        float postHitProgress = Mathf.Clamp01((songTime - hitTime) / missDespawnDelay);
+        return 1f + (postHitProgress * missOvershootDistance);
     }
 
     private void EnsureSymbolText(string symbol, int fontSize, Vector2 anchoredPosition)

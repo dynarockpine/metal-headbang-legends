@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -57,11 +61,6 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField] private float goodWindow = 0.16f;
     [SerializeField] private float tapMaxDuration = 0.25f;
     [SerializeField] private float tapMaxMovement = 60f;
-    [SerializeField] private float swipeDownMinDistance = 180f;
-    [SerializeField] private float swipeHorizontalMinDistance = 180f;
-    [SerializeField] private float swipeMaxDuration = 0.5f;
-    [SerializeField] private float swipeVerticalBias = 1.2f;
-    [SerializeField] private float swipeHorizontalBias = 1.2f;
 
     [Header("Lane Perspective")]
     [SerializeField, Range(0f, 0.4f)] private float spawnDepthOnLane = 0.04f;
@@ -77,11 +76,25 @@ public class RhythmGameManager : MonoBehaviour
     [SerializeField] private Color laneEdgeColor = new Color(1f, 1f, 1f, 0.14f);
 
     [Header("UI")]
-    [SerializeField] private Text scoreText;
-    [SerializeField] private Text comboText;
-    [SerializeField] private Text judgmentText;
+    [SerializeField] private TextMeshProUGUI scoreText;
+    [SerializeField] private TextMeshProUGUI comboText;
+    [SerializeField] private TextMeshProUGUI judgmentText;
     [SerializeField] private Color judgmentLineColor = new Color(1f, 1f, 1f, 0.85f);
     [SerializeField] private Vector2 judgmentLineSize = new Vector2(920f, 10f);
+
+    [Header("Touch Areas")]
+    [SerializeField] private RectTransform[] laneTouchAreas = new RectTransform[5];
+    [SerializeField] private Vector2 laneTouchAreaSize = new Vector2(160f, 170f);
+    [SerializeField] private float laneTouchAreaYOffset = -170f;
+    [SerializeField] private Color laneTouchAreaColor = new Color(1f, 1f, 1f, 0.08f);
+    [SerializeField] private Color laneTouchAreaBorderColor = new Color(1f, 1f, 1f, 0.22f);
+
+    [Header("Editor Guides")]
+    [SerializeField] private bool showLanePointGizmos = true;
+    [SerializeField] private float lanePointGizmoRadius = 28f;
+
+    [Header("Lane Alignment")]
+    [SerializeField] private bool autoAlignLanePointsToJudgmentLine = true;
 
     [Header("Chart Source")]
     [SerializeField] private bool loadChartFromJson = true;
@@ -91,14 +104,16 @@ public class RhythmGameManager : MonoBehaviour
     [Header("Prototype Chart")]
     [SerializeField] private NoteData[] chart =
     {
+        new NoteData(1.5f, NoteType.Tap, 0),
+        new NoteData(2.0f, NoteType.Tap, 1),
         new NoteData(2.0f, NoteType.Tap, 2),
-        new NoteData(2.5f, NoteType.SwipeLeftRight, 0),
-        new NoteData(3.0f, NoteType.SwipeDown, 1),
-        new NoteData(3.5f, NoteType.Windmill, 3),
+        new NoteData(2.5f, NoteType.Tap, 3),
+        new NoteData(3.0f, NoteType.Tap, 0),
+        new NoteData(3.5f, NoteType.Tap, 1),
         new NoteData(4.0f, NoteType.Hold, 4),
         new NoteData(4.5f, NoteType.Tap, 2),
-        new NoteData(5.0f, NoteType.Windmill, 3),
-        new NoteData(5.5f, NoteType.SwipeLeftRight, 0)
+        new NoteData(5.0f, NoteType.Tap, 3),
+        new NoteData(5.5f, NoteType.Tap, 0)
     };
 
     private int nextNoteIndex;
@@ -133,9 +148,11 @@ public class RhythmGameManager : MonoBehaviour
     private void Start()
     {
         ResolveReferences();
-        EnsureLaneVisuals();
         EnsureJudgmentLineVisual();
+        SyncLanePointsToJudgmentLine();
+        EnsureLaneVisuals();
         EnsureGameplayUi();
+        EnsureLaneTouchAreas();
         RefreshScoreUi();
         RefreshComboUi();
         HideJudgmentText();
@@ -153,6 +170,12 @@ public class RhythmGameManager : MonoBehaviour
             return;
         }
 
+        if (SyncLanePointsToJudgmentLine())
+        {
+            EnsureLaneVisuals();
+            EnsureLaneTouchAreas();
+        }
+
         HandleGestureInput();
         UpdateJudgmentText();
 
@@ -164,6 +187,58 @@ public class RhythmGameManager : MonoBehaviour
             nextNoteIndex++;
         }
     }
+
+    private void OnValidate()
+    {
+        ResolveReferences();
+        if (SyncLanePointsToJudgmentLine())
+        {
+            EnsureLaneVisuals();
+            EnsureLaneTouchAreas();
+        }
+    }
+
+#if UNITY_EDITOR
+    private void OnDrawGizmos()
+    {
+        if (!showLanePointGizmos || lanePoints == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < lanePoints.Length; i++)
+        {
+            RectTransform lanePoint = lanePoints[i];
+            if (lanePoint == null)
+            {
+                continue;
+            }
+
+            Vector3 worldPosition = lanePoint.position;
+            Color laneColor = GetLaneColor(i, 0.95f);
+            laneColor.a = 0.95f;
+
+            Handles.color = laneColor;
+            Handles.DrawSolidDisc(worldPosition, Vector3.forward, lanePointGizmoRadius);
+
+            Gizmos.color = Color.white;
+            Gizmos.DrawWireSphere(worldPosition, lanePointGizmoRadius);
+
+            Handles.Label(
+                worldPosition + new Vector3(0f, lanePointGizmoRadius + 18f, 0f),
+                $"Lane{i}",
+                CreateLaneGuideLabelStyle(laneColor));
+        }
+    }
+
+    private GUIStyle CreateLaneGuideLabelStyle(Color laneColor)
+    {
+        GUIStyle style = new GUIStyle(EditorStyles.boldLabel);
+        style.alignment = TextAnchor.MiddleCenter;
+        style.normal.textColor = laneColor;
+        return style;
+    }
+#endif
 
     private bool CanSpawnNotes()
     {
@@ -354,6 +429,37 @@ public class RhythmGameManager : MonoBehaviour
         return null;
     }
 
+    private bool SyncLanePointsToJudgmentLine()
+    {
+        if (!autoAlignLanePointsToJudgmentLine || judgmentLine == null || lanePoints == null)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        float targetY = judgmentLine.anchoredPosition.y;
+
+        for (int i = 0; i < lanePoints.Length; i++)
+        {
+            RectTransform lanePoint = lanePoints[i];
+            if (lanePoint == null)
+            {
+                continue;
+            }
+
+            Vector2 anchoredPosition = lanePoint.anchoredPosition;
+            if (Mathf.Approximately(anchoredPosition.y, targetY))
+            {
+                continue;
+            }
+
+            lanePoint.anchoredPosition = new Vector2(anchoredPosition.x, targetY);
+            changed = true;
+        }
+
+        return changed;
+    }
+
     private Transform FindChildRecursive(Transform parent, string objectName)
     {
         if (parent.name == objectName)
@@ -381,7 +487,10 @@ public class RhythmGameManager : MonoBehaviour
             return;
         }
 
+        noteData.type = NormalizeNoteTypeForLane(noteData.lane);
+
         GameObject noteObject = Instantiate(notePrefab, noteParent);
+        PlaceNoteBehindTouchOverlays(noteObject.transform);
         RhythmNote rhythmNote = noteObject.GetComponent<RhythmNote>();
 
         if (rhythmNote == null)
@@ -405,6 +514,25 @@ public class RhythmGameManager : MonoBehaviour
             noteData.lane);
 
         activeNotesByLane[noteData.lane].Add(rhythmNote);
+    }
+
+    private void PlaceNoteBehindTouchOverlays(Transform noteTransform)
+    {
+        if (noteTransform == null)
+        {
+            return;
+        }
+
+        Transform touchAreasRoot = noteParent != null ? noteParent.Find("LaneTouchAreas") : null;
+        if (touchAreasRoot != null)
+        {
+            noteTransform.SetSiblingIndex(touchAreasRoot.GetSiblingIndex());
+        }
+
+        if (judgmentLine != null)
+        {
+            judgmentLine.SetAsLastSibling();
+        }
     }
 
     private void HandleGestureInput()
@@ -483,29 +611,27 @@ public class RhythmGameManager : MonoBehaviour
 
         if (duration <= tapMaxDuration && delta.magnitude <= tapMaxMovement)
         {
-            TryHitNoteType(NoteType.Tap);
-            return;
-        }
-
-        if (duration <= swipeMaxDuration &&
-            delta.y <= -swipeDownMinDistance &&
-            Mathf.Abs(delta.y) >= Mathf.Abs(delta.x) * swipeVerticalBias)
-        {
-            TryHitNoteType(NoteType.SwipeDown);
-            return;
-        }
-
-        if (duration <= swipeMaxDuration &&
-            Mathf.Abs(delta.x) >= swipeHorizontalMinDistance &&
-            Mathf.Abs(delta.x) >= Mathf.Abs(delta.y) * swipeHorizontalBias)
-        {
-            TryHitNoteType(NoteType.SwipeLeftRight);
+            int tappedLane = GetTappedLaneIndex(screenPosition);
+            if (tappedLane >= 0)
+            {
+                TryHitLane(tappedLane);
+            }
         }
     }
 
-    private bool TryHitNoteType(NoteType noteType)
+    private bool TryHitLane(int laneIndex)
     {
-        RhythmNote candidate = GetBestCandidate(noteType);
+        if (laneIndex < 0 || laneIndex >= activeNotesByLane.Length)
+        {
+            return false;
+        }
+
+        if (laneIndex == 4)
+        {
+            return false;
+        }
+
+        RhythmNote candidate = GetBestCandidateInLane(laneIndex);
         if (candidate == null)
         {
             return false;
@@ -524,36 +650,32 @@ public class RhythmGameManager : MonoBehaviour
         return true;
     }
 
-    private RhythmNote GetBestCandidate(NoteType noteType)
+    private RhythmNote GetBestCandidateInLane(int laneIndex)
     {
         RhythmNote bestCandidate = null;
         float bestTimeOffset = float.MaxValue;
+        List<RhythmNote> laneNotes = activeNotesByLane[laneIndex];
 
-        for (int i = 0; i < lanePoints.Length; i++)
+        for (int j = 0; j < laneNotes.Count; j++)
         {
-            List<RhythmNote> laneNotes = activeNotesByLane[i];
-
-            for (int j = 0; j < laneNotes.Count; j++)
+            RhythmNote note = laneNotes[j];
+            if (note == null)
             {
-                RhythmNote note = laneNotes[j];
-                if (note == null)
-                {
-                    laneNotes.RemoveAt(j);
-                    j--;
-                    continue;
-                }
+                laneNotes.RemoveAt(j);
+                j--;
+                continue;
+            }
 
-                if (note.NoteType != noteType)
-                {
-                    continue;
-                }
+            if (!IsTapLaneNote(note))
+            {
+                continue;
+            }
 
-                float timeOffset = Mathf.Abs(GetSongTime() - note.HitTime);
-                if (timeOffset < bestTimeOffset)
-                {
-                    bestTimeOffset = timeOffset;
-                    bestCandidate = note;
-                }
+            float timeOffset = Mathf.Abs(GetSongTime() - note.HitTime);
+            if (timeOffset < bestTimeOffset)
+            {
+                bestTimeOffset = timeOffset;
+                bestCandidate = note;
             }
         }
 
@@ -569,18 +691,21 @@ public class RhythmGameManager : MonoBehaviour
 
         activeNotesByLane[note.Lane].Remove(note);
 
-        if (!wasHit && IsJudgeableNoteType(note.NoteType))
+        if (!wasHit && IsJudgeableNote(note))
         {
             RegisterJudgment(JudgmentResult.Miss, note.Lane);
             Debug.Log($"Miss... {note.NoteType} Lane {note.Lane}");
         }
     }
 
-    private bool IsJudgeableNoteType(NoteType noteType)
+    private bool IsJudgeableNote(RhythmNote note)
     {
-        return noteType == NoteType.Tap ||
-               noteType == NoteType.SwipeDown ||
-               noteType == NoteType.SwipeLeftRight;
+        return note != null && IsTapLaneNote(note);
+    }
+
+    private bool IsTapLaneNote(RhythmNote note)
+    {
+        return note != null && note.Lane >= 0 && note.Lane <= 3 && note.NoteType != NoteType.Hold;
     }
 
     private void RegisterJudgment(JudgmentResult result, int lane)
@@ -710,9 +835,9 @@ public class RhythmGameManager : MonoBehaviour
                 new Vector2(0f, 1f),
                 new Vector2(0f, 1f),
                 new Vector2(24f, -24f),
-                TextAnchor.UpperLeft,
+                TextAlignmentOptions.TopLeft,
                 42,
-                FontStyle.Bold);
+                FontStyles.Bold);
         }
 
         if (comboText == null)
@@ -723,9 +848,9 @@ public class RhythmGameManager : MonoBehaviour
                 new Vector2(0.5f, 0f),
                 new Vector2(0.5f, 0f),
                 new Vector2(0f, 140f),
-                TextAnchor.MiddleCenter,
+                TextAlignmentOptions.Center,
                 48,
-                FontStyle.Bold);
+                FontStyles.Bold);
         }
 
         if (judgmentText == null)
@@ -736,14 +861,188 @@ public class RhythmGameManager : MonoBehaviour
                 new Vector2(0.5f, 0f),
                 new Vector2(0.5f, 0f),
                 new Vector2(0f, 240f),
-                TextAnchor.MiddleCenter,
+                TextAlignmentOptions.Center,
                 56,
-                FontStyle.Bold);
+                FontStyles.Bold);
         }
+    }
+
+    private void EnsureLaneTouchAreas()
+    {
+        if (noteParent == null || lanePoints == null || lanePoints.Length == 0)
+        {
+            return;
+        }
+
+        if (laneTouchAreas == null || laneTouchAreas.Length != lanePoints.Length)
+        {
+            laneTouchAreas = new RectTransform[lanePoints.Length];
+        }
+
+        Transform areasRoot = noteParent.Find("LaneTouchAreas");
+        if (areasRoot == null)
+        {
+            GameObject areasRootObject = new GameObject("LaneTouchAreas", typeof(RectTransform));
+            RectTransform areasRootRect = areasRootObject.GetComponent<RectTransform>();
+            areasRootRect.SetParent(noteParent, false);
+            areasRootRect.anchorMin = new Vector2(0.5f, 0.5f);
+            areasRootRect.anchorMax = new Vector2(0.5f, 0.5f);
+            areasRootRect.pivot = new Vector2(0.5f, 0.5f);
+            areasRootRect.anchoredPosition = Vector2.zero;
+            areasRootRect.sizeDelta = noteParent.rect.size;
+            areasRoot = areasRootRect;
+        }
+
+        areasRoot.SetAsLastSibling();
+
+        for (int i = 0; i < lanePoints.Length; i++)
+        {
+            if (lanePoints[i] == null)
+            {
+                continue;
+            }
+
+            laneTouchAreas[i] = EnsureLaneTouchArea(areasRoot, i);
+        }
+
+        if (judgmentLine != null)
+        {
+            judgmentLine.SetAsLastSibling();
+        }
+    }
+
+    private RectTransform EnsureLaneTouchArea(Transform parent, int laneIndex)
+    {
+        string areaObjectName = $"LaneTouchArea_{laneIndex}";
+        Transform existing = parent.Find(areaObjectName);
+        RectTransform areaRect;
+        Image areaImage;
+
+        if (existing == null)
+        {
+            GameObject areaObject = new GameObject(areaObjectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            areaRect = areaObject.GetComponent<RectTransform>();
+            areaRect.SetParent(parent, false);
+            areaImage = areaObject.GetComponent<Image>();
+        }
+        else
+        {
+            areaRect = existing as RectTransform;
+            areaImage = existing.GetComponent<Image>();
+        }
+
+        areaRect.anchorMin = new Vector2(0.5f, 0.5f);
+        areaRect.anchorMax = new Vector2(0.5f, 0.5f);
+        areaRect.pivot = new Vector2(0.5f, 0.5f);
+        areaRect.anchoredPosition = lanePoints[laneIndex].anchoredPosition + new Vector2(0f, laneTouchAreaYOffset);
+        areaRect.sizeDelta = laneTouchAreaSize;
+        areaRect.localRotation = Quaternion.identity;
+        areaRect.localScale = Vector3.one;
+
+        areaImage.color = laneIndex == 4
+            ? new Color(1f, 0.52f, 0.12f, laneTouchAreaColor.a + 0.05f)
+            : GetLaneColor(laneIndex, laneTouchAreaColor.a);
+        areaImage.raycastTarget = false;
+
+        EnsureLaneTouchAreaBorder(areaRect, laneIndex);
+        EnsureLaneTouchAreaLabel(areaRect, laneIndex);
+        return areaRect;
+    }
+
+    private void EnsureLaneTouchAreaBorder(RectTransform parent, int laneIndex)
+    {
+        Transform existing = parent.Find("Border");
+        RectTransform borderRect;
+        Image borderImage;
+
+        if (existing == null)
+        {
+            GameObject borderObject = new GameObject("Border", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            borderRect = borderObject.GetComponent<RectTransform>();
+            borderRect.SetParent(parent, false);
+            borderImage = borderObject.GetComponent<Image>();
+        }
+        else
+        {
+            borderRect = existing as RectTransform;
+            borderImage = existing.GetComponent<Image>();
+        }
+
+        borderRect.anchorMin = Vector2.zero;
+        borderRect.anchorMax = Vector2.one;
+        borderRect.offsetMin = Vector2.zero;
+        borderRect.offsetMax = Vector2.zero;
+        borderImage.color = laneIndex == 4
+            ? new Color(1f, 0.72f, 0.28f, laneTouchAreaBorderColor.a)
+            : GetLaneColor(laneIndex, laneTouchAreaBorderColor.a);
+        borderImage.raycastTarget = false;
+
+        Transform innerExisting = borderRect.Find("Inner");
+        RectTransform innerRect;
+        Image innerImage;
+
+        if (innerExisting == null)
+        {
+            GameObject innerObject = new GameObject("Inner", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            innerRect = innerObject.GetComponent<RectTransform>();
+            innerRect.SetParent(borderRect, false);
+            innerImage = innerObject.GetComponent<Image>();
+        }
+        else
+        {
+            innerRect = innerExisting as RectTransform;
+            innerImage = innerExisting.GetComponent<Image>();
+        }
+
+        innerRect.anchorMin = Vector2.zero;
+        innerRect.anchorMax = Vector2.one;
+        innerRect.offsetMin = new Vector2(5f, 5f);
+        innerRect.offsetMax = new Vector2(-5f, -5f);
+        innerImage.color = laneIndex == 4
+            ? new Color(1f, 0.52f, 0.12f, laneTouchAreaColor.a + 0.05f)
+            : GetLaneColor(laneIndex, laneTouchAreaColor.a);
+        innerImage.raycastTarget = false;
+    }
+
+    private void EnsureLaneTouchAreaLabel(RectTransform parent, int laneIndex)
+    {
+        string labelName = laneIndex == 4 ? "HOLD" : "TAP";
+        Transform existing = parent.Find("Label");
+        TextMeshProUGUI label = existing != null ? existing.GetComponent<TextMeshProUGUI>() : null;
+        if (label == null)
+        {
+            label = CreateHudText(
+                parent,
+                "Label",
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                TextAlignmentOptions.Center,
+                28,
+                FontStyles.Bold);
+        }
+
+        RectTransform labelRect = label.rectTransform;
+        labelRect.anchorMin = Vector2.zero;
+        labelRect.anchorMax = Vector2.one;
+        labelRect.offsetMin = new Vector2(8f, 8f);
+        labelRect.offsetMax = new Vector2(-8f, -8f);
+        labelRect.anchoredPosition = Vector2.zero;
+        labelRect.pivot = new Vector2(0.5f, 0.5f);
+
+        label.text = labelName;
+        label.color = laneIndex == 4
+            ? new Color(1f, 0.88f, 0.58f, 0.95f)
+            : GetLaneColor(laneIndex, 0.95f);
     }
 
     private void EnsureJudgmentLineVisual()
     {
+        if (judgmentLine == null)
+        {
+            judgmentLine = CreateJudgmentLineIfMissing();
+        }
+
         if (judgmentLine == null)
         {
             return;
@@ -762,6 +1061,21 @@ public class RhythmGameManager : MonoBehaviour
         judgmentLine.anchorMax = new Vector2(0.5f, 0.5f);
         judgmentLine.pivot = new Vector2(0.5f, 0.5f);
         judgmentLine.sizeDelta = judgmentLineSize;
+        judgmentLine.SetAsLastSibling();
+    }
+
+    private RectTransform CreateJudgmentLineIfMissing()
+    {
+        if (noteParent == null)
+        {
+            return null;
+        }
+
+        GameObject lineObject = new GameObject("JudgementLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        RectTransform lineRect = lineObject.GetComponent<RectTransform>();
+        lineRect.SetParent(noteParent, false);
+        lineRect.anchoredPosition = new Vector2(0f, -460f);
+        return lineRect;
     }
 
     private void EnsureLaneVisuals()
@@ -928,24 +1242,58 @@ public class RhythmGameManager : MonoBehaviour
         return color;
     }
 
-    private Text CreateHudText(
+    private NoteType NormalizeNoteTypeForLane(int lane)
+    {
+        return lane == 4 ? NoteType.Hold : NoteType.Tap;
+    }
+
+    private int GetTappedLaneIndex(Vector2 screenPosition)
+    {
+        Canvas canvas = noteParent != null ? noteParent.root.GetComponent<Canvas>() : FindFirstObjectByType<Canvas>();
+        Camera eventCamera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
+
+        if (laneTouchAreas == null)
+        {
+            return -1;
+        }
+
+        for (int i = 0; i < laneTouchAreas.Length; i++)
+        {
+            RectTransform area = laneTouchAreas[i];
+            if (area == null)
+            {
+                continue;
+            }
+
+            if (RectTransformUtility.RectangleContainsScreenPoint(area, screenPosition, eventCamera))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private TextMeshProUGUI CreateHudText(
         Transform parent,
         string objectName,
         Vector2 anchorMin,
         Vector2 anchorMax,
         Vector2 anchoredPosition,
-        TextAnchor alignment,
+        TextAlignmentOptions alignment,
         int fontSize,
-        FontStyle fontStyle)
+        FontStyles fontStyle)
     {
         Transform existing = parent.Find(objectName);
-        Text text = existing != null ? existing.GetComponent<Text>() : null;
+        TextMeshProUGUI text = existing != null ? existing.GetComponent<TextMeshProUGUI>() : null;
         if (text != null)
         {
             return text;
         }
 
-        GameObject textObject = new GameObject(objectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        GameObject textObject = existing != null
+            ? existing.gameObject
+            : new GameObject(objectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
         RectTransform rectTransform = textObject.GetComponent<RectTransform>();
         rectTransform.SetParent(parent, false);
         rectTransform.anchorMin = anchorMin;
@@ -954,36 +1302,32 @@ public class RhythmGameManager : MonoBehaviour
         rectTransform.anchoredPosition = anchoredPosition;
         rectTransform.sizeDelta = new Vector2(420f, 120f);
 
-        text = textObject.GetComponent<Text>();
-        text.font = CreateRuntimeFont(fontSize);
+        text = textObject.GetComponent<TextMeshProUGUI>();
+        if (text == null)
+        {
+            text = textObject.AddComponent<TextMeshProUGUI>();
+        }
+
+        TMP_FontAsset defaultFont = TMP_Settings.defaultFontAsset;
+        if (defaultFont == null)
+        {
+            defaultFont = Resources.Load<TMP_FontAsset>("Fonts & Materials/LiberationSans SDF");
+        }
+
+        if (defaultFont != null)
+        {
+            text.font = defaultFont;
+        }
+
         text.fontSize = fontSize;
         text.fontStyle = fontStyle;
         text.alignment = alignment;
         text.color = Color.white;
-        text.horizontalOverflow = HorizontalWrapMode.Overflow;
-        text.verticalOverflow = VerticalWrapMode.Overflow;
+        text.enableWordWrapping = false;
+        text.overflowMode = TextOverflowModes.Overflow;
         text.text = string.Empty;
 
         return text;
-    }
-
-    private Font CreateRuntimeFont(int fontSize)
-    {
-        string[] fontCandidates =
-        {
-            "Arial",
-            "Helvetica",
-            "Verdana",
-            "Segoe UI"
-        };
-
-        Font runtimeFont = Font.CreateDynamicFontFromOSFont(fontCandidates, fontSize);
-        if (runtimeFont != null)
-        {
-            return runtimeFont;
-        }
-
-        return Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
     }
 
     private Vector2 GetSpawnPosition(Vector2 targetPosition)
@@ -1020,7 +1364,10 @@ public class RhythmGameManager : MonoBehaviour
         for (int i = 0; i < loadedChart.notes.Length; i++)
         {
             ChartNoteData note = loadedChart.notes[i];
-            loadedNotes[i] = new NoteData(note.time, note.type, note.lane);
+            loadedNotes[i] = new NoteData(
+                note.time,
+                NormalizeNoteTypeForLane(note.lane),
+                note.lane);
         }
 
         chart = loadedNotes;
